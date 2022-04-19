@@ -5,6 +5,8 @@ import torch
 import torch.nn as nn
 from torch.nn.utils import spectral_norm
 from utils import weights_init
+from huggingface_hub import PyTorchModelHubMixin
+
 
 
 def conv2d(*args, **kwargs):
@@ -95,7 +97,7 @@ def UpBlockComp(in_planes, out_planes):
     return block
 
 
-class Generator(nn.Module):
+class Generator(nn.Module, PyTorchModelHubMixin):
     def __init__(self, ngf=64, nz=100, nc=3, im_size=1024):
         super(Generator, self).__init__()
 
