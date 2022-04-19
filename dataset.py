@@ -8,5 +8,5 @@ def load_data(data_path, batch_size):#, mean, std):
                                            transforms.ToTensor(),
                                            transforms.Normalize([0.5,0.5,0.5],[0.5,0.5,0.5])])
     train_data = datasets.ImageFolder(data_path, transform=train_transforms)
-    trainloader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=8)
+    trainloader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=2)
     return trainloader
