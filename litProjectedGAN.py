@@ -12,8 +12,9 @@ from differentiable_augmentation import DiffAugment
 from dataclasses import asdict
 import wandb
 import torchvision.utils as vutils
-import pdb
 from torchvision import transforms
+from huggingface_hub import PyTorchModelHubMixin
+
 
 
 class DownBlock(nn.Module):
@@ -62,7 +63,6 @@ class CSM(nn.Module):
 
     def forward(self, high_res, low_res=None):
         batch, channels, width, height = high_res.size()
-        # pdb.set_trace()
         high_res_flatten = high_res.view(batch, channels, width * height)
         high_res = self.conv1(high_res_flatten)
         high_res = high_res.view(batch, channels, width, height)
@@ -72,7 +72,7 @@ class CSM(nn.Module):
         high_res = F.interpolate(high_res, scale_factor=2., mode="bilinear", align_corners=True)
         return high_res
 
-class litProjectedGAN(pl.LightningModule):
+class litProjectedGAN(pl.LightningModule, PyTorchModelHubMixin):
     def __init__(self, args):#, mean, stddev):
         super(litProjectedGAN, self).__init__()
         self.save_hyperparameters(asdict(args) if not isinstance(args, Dict) else args)
@@ -80,7 +80,7 @@ class litProjectedGAN(pl.LightningModule):
         #self.mean = mean
         #self.stddev = stddev
 
-        self.gen = Generator(im_size=args.image_size)
+        self.gen = Generator(im_size=args.image_size, nz=args.latent_dim)
 
         self.efficient_net = build_efficientnet_lite("efficientnet_lite1", 1000)
         for param in self.efficient_net.parameters():
@@ -97,7 +97,6 @@ class litProjectedGAN(pl.LightningModule):
             CSM(feature_sizes[1], feature_sizes[0]),
             CSM(feature_sizes[0], feature_sizes[0]),
         ])
-        pdb.set_trace()
         self.discs = nn.ModuleList([
            MultiScaleDiscriminator(feature_sizes[0], 1),
            MultiScaleDiscriminator(feature_sizes[0], 2),
@@ -147,14 +146,14 @@ class litProjectedGAN(pl.LightningModule):
 
     # used at inferece time
     def forward(self, x): # x is a batch of z vectors
-        return (self.renorm(self.gen(x))).clip(min=0,max=1)
+        return (self.renorm(torch.tanh(self.gen(x))))#.clip(min=0,max=1)
 
     def training_step(self, batch: Tuple[torch.tensor, torch.tensor], batch_idx, optimizer_idx):
         batch = batch[0]
         
         if optimizer_idx != 0: # optimizer_idx will be 0 for generator and >= 1 for discs optimizers
             z = torch.randn(batch.shape[0], self.latent_dim, device=self.device)
-            gen_imgs_disc = self.gen(z).detach()
+            gen_imgs_disc = (torch.tanh(self.gen(z))).detach()
             if self.diff_aug:
                 gen_imgs_disc = self.DiffAug.forward(gen_imgs_disc)
                 real_imgs = self.DiffAug.forward(batch)
@@ -178,7 +177,7 @@ class litProjectedGAN(pl.LightningModule):
         # Train Generator:
         if optimizer_idx == 0:
             z = torch.randn(batch.shape[0], self.latent_dim, device=self.device)
-            gen_imgs_gen = self.gen(z)
+            gen_imgs_gen = torch.tanh(self.gen(z))
 
             if self.diff_aug:
                 gen_imgs_gen = self.DiffAug.forward(gen_imgs_gen)
@@ -200,17 +199,13 @@ class litProjectedGAN(pl.LightningModule):
     def on_epoch_end(self):
         if (self.current_epoch % self.hparams.log_every) == 0:
             with torch.no_grad():
-                z = self.validation_static_z.type_as(self.gen.init.init[0].weight)
-                sample_imgs = self.gen(z)
-                sample_imgs = self.renorm(sample_imgs)
-                sample_imgs = sample_imgs.clip(min=0,max=1)
+                z = self.validation_static_z#.type_as(self.gen.init.init[0].weight)
+                sample_imgs = self(z)
                 grid = vutils.make_grid(sample_imgs, nrow=5, padding=2)
                 images_staticZ = wandb.Image(grid, caption="Generated Images (Static Z)")
                 
                 z = torch.randn(25, self.latent_dim).to(self.device)
-                sample_imgs = self.gen(z)
-                sample_imgs = self.renorm(sample_imgs)
-                sample_imgs = sample_imgs.clip(min=0,max=1)
+                sample_imgs = self(z)
                 grid = vutils.make_grid(sample_imgs, nrow=5, padding=2, normalize=True, value_range=(0.,1.))
                 images_randomZ = wandb.Image(grid, caption="Generated Images (Random Z)")
                 wandb.log({"Generated images from Static Z and Varying Z": (images_staticZ,images_randomZ)})
@@ -220,6 +215,6 @@ class litProjectedGAN(pl.LightningModule):
         self.validation_static_z = torch.randn(25, self.latent_dim, device=self.device)
 
     def configure_optimizers(self):
-        optimizers_list = [Adam(self.gen.parameters(), lr=self.hparams.lr, betas=(self.hparams.beta1,self.hparams.beta2))]
-        optimizers_list += [Adam(disc.parameters(),lr=0.001, betas=(0,0.99)) for disc in self.discs]
+        optimizers_list = [Adam(self.gen.parameters(), lr=self.hparams.gen_lr, betas=(self.hparams.beta1,self.hparams.beta2))]
+        optimizers_list += [Adam(disc.parameters(),lr=self.hparams.discr_lr, betas=(self.hparams.beta1,self.hparams.beta2)) for disc in self.discs]
         return optimizers_list, [] # empty lr-scheduler list. Dunno what to use.
