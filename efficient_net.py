@@ -191,7 +191,7 @@ class EfficientNetLite(nn.Module):
                     drop_connect_rate *= float(idx) / len(self.blocks)
                 x = block(x, drop_connect_rate)
                 idx +=1
-            if i in [1, 2, 3, 6]:
+            if i in [1, 2, 4, 6]:
                 features.append(x)
             # print(f"After block{i}", x.shape)
         x = self.head(x)
